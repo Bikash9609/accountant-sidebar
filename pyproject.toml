@@ -1,0 +1,29 @@
+[project]
+name = "accountant-sidebar-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10.13"
+dependencies = [
+    "chromadb>=1.5.9",
+    "faker>=40.23.0",
+    "langchain>=1.3.9",
+    "langchain-chroma>=1.1.0",
+    "langchain-ollama>=1.1.0",
+    "langchain-openai>=1.3.2",
+    "langchain-tavily>=0.2.18",
+    "python-dotenv>=1.2.2",
+    "tavily-python>=0.7.26",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.6.0",
+    "ruff>=0.15.17",
+]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.format]
+quote-style = "double"
