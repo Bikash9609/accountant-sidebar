@@ -52,7 +52,7 @@ Context:
 )
 
 
-RERANKER_SYSTEM_PROMOPT = SystemMessage("""
+REWRITER_SYSTEM_PROMPT = SystemMessage("""
 You are an expert search query generation system for document retrieval.
 
 Your task is to generate diverse search queries that maximize the chance of finding relevant information from financial and accounting documents.
