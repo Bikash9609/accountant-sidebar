@@ -14,6 +14,8 @@ from langchain_community.document_loaders import PyPDFLoader, DirectoryLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.tools.retriever import create_retriever_tool
 from sentence_transformers import CrossEncoder
+from langchain.agents.middleware.summarization import SummarizationMiddleware
+from langchain.agents.structured_output import ToolStrategy
 
 
 from pydantic import BaseModel, Field
@@ -21,7 +23,7 @@ from pydantic import BaseModel, Field
 from config import langchain, env
 from system_prompt import REWRITER_SYSTEM_PROMPT, SYSTEM_PROMPT
 from tools import get_retriever_tool, tools
-
+from langfuse_init import langfuse_handler
 
 # Logging and verbose
 langchain.initialize()
@@ -48,7 +50,7 @@ all_tools = [*tools, retriever_tool]
 loader = DirectoryLoader(
     glob="**/*.pdf",
     path=DOCS_DIR,
-    loader_cls=PyPDFLoader,  # type:ignore
+    loader_cls=PyPDFLoader,  # type: ignore
 )
 
 
@@ -104,41 +106,42 @@ build_store()
 
 
 llm = ChatOllama(
-    model="qwen3.5:2b",
+    model="qwen3.5:4b",
     temperature=0.0,
 )
 
 
 class RewriterResponse(BaseModel):
     """
-    Rewrite user query into multiple similar queries for vector space search
+    Response structure for query generator, must invoke this tool to format response preoply
     """
 
     queries: List[str] = Field(
-        default_factory=List,
+        default_factory=list,
         description="List of queries for vector space search relating to the user query",
     )
+
+
+rewriter = ChatOllama(model="qwen3:8b", temperature=0.0, reasoning=False)
+structured_rewriter = rewriter.with_structured_output(
+    RewriterResponse,
+    method="json_schema",
+)
 
 
 def get_user_input():
     return str(input("Input your query: "))
 
 
-def get_rewriter_agent():
-    return create_agent(
-        model=llm,
-        response_format=RewriterResponse,
-        name="rewriter_agent",
-        system_prompt=REWRITER_SYSTEM_PROMPT,
-    )
-
-
 def query_rewriter(query: str):
-    rewriter: dict[str, Any] | Any = get_rewriter_agent().invoke(
-        {"messages": [HumanMessage(content=query)]}
+    result = structured_rewriter.invoke(
+        [
+            REWRITER_SYSTEM_PROMPT,
+            HumanMessage(content=query),
+        ],
+        config={"callbacks": [langfuse_handler]},
     )
-    response: RewriterResponse = rewriter["structured_response"]
-    return response.queries
+    return result.queries
 
 
 def fetch_cached_docs(queries: List[str]):
@@ -152,8 +155,17 @@ def fetch_cached_docs(queries: List[str]):
     return fetched_docs
 
 
-def build_initial_context(docs: List) -> str:
-    return "\n\n".join(docs)
+def build_initial_context(docs: List, max_tokens: int = 3000) -> str:
+    context = []
+    total = 0
+    for doc in docs:
+        tokens = estimate_tokens(doc)
+        if total + tokens > max_tokens:
+            break
+        context.append(doc)
+        total += tokens
+
+    return "\n\n".join(context)
 
 
 def get_main_agent_system_promopt(initial_context: str):
@@ -161,7 +173,23 @@ def get_main_agent_system_promopt(initial_context: str):
 
 
 def get_main_agent():
-    return create_agent(model=llm, tools=all_tools, name="main_agent")
+    return create_agent(
+        model=llm,
+        tools=all_tools,
+        name="main_agent",
+        middleware=[
+            SummarizationMiddleware(
+                model=llm,
+                trigger=("tokens", 500000),
+                keep=("messages", 15),
+                trim_tokens_to_summarize=30000,
+            )
+        ],
+    )
+
+
+def estimate_tokens(text: str):
+    return len(text) // 4
 
 
 def execute_main_agent(input: str):
@@ -181,9 +209,10 @@ def execute_main_agent(input: str):
                 SystemMessage(get_main_agent_system_promopt(initial_context)),
                 HumanMessage(content=input),
             ]
-        }
+        },
+        config={"callbacks": [langfuse_handler]},
     )
-    print(res)
+    print(res["messages"][-1].content)
 
 
-execute_main_agent(get_user_input())
+execute_main_agent("List all salary credits.")
